@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+
+"""
+MCL Test Script
+
+This script     def is_valid_position(self, position):
+        """Check if a position is valid (inside the map and not inside an obstacle)."""
+        x, y = position
+        
+        # Check if position is inside map boundaries
+        if x < 0 or x >= self.map_size[0] or y < 0 or y >= self.map_size[1]:
+            return False
+        
+        # Check if position is inside any obstacle
+        for obstacle in self.obstacles:
+            ox, oy, width, height = obstacle
+            # Check if point is inside the rectangle
+            if (ox <= x <= ox + width) and (oy <= y <= oy + height):
+                return False
+        
+        return True
+    
+    def run_simulation(self):tandalone Monte Carlo Localization implementation
+by running a simulation with a robot in a known environment.
+"""
+
+import sys
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+import argparse
+import json
+from matplotlib.animation import FuncAnimation
+
+# Add the parent directory to the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Import the MCL implementation
+from src.localization.monte_carlo_localization import MonteCarloLocalization, Particle
+from src.utils.robot_utils import create_artificial_map, simulate_robot_motion, simulate_sensor_readings
+
+class MCLTest:
+    def __init__(self, map_size=(100, 100), num_particles=500, motion_noise=(0.1, 0.1, 0.05), 
+                 measurement_noise=0.1, max_steps=100, obstacle_count=10):
+        self.map_size = map_size
+        self.num_particles = num_particles
+        self.motion_noise = motion_noise
+        self.measurement_noise = measurement_noise
+        self.max_steps = max_steps
+        self.obstacle_count = obstacle_count
+        
+        # Create artificial map with obstacles
+        self.map_data, self.obstacles = create_artificial_map(map_size, obstacle_count)
+        
+        # Initialize Monte Carlo Localization
+        self.mcl = MonteCarloLocalization(num_particles=num_particles, 
+                              map_data=self.map_data,
+                              motion_noise=motion_noise,
+                              measurement_noise=measurement_noise)
+        
+        # Robot's true position (x, y, theta)
+        valid_position = False
+        while not valid_position:
+            self.true_position = np.array([
+                np.random.uniform(0, map_size[0]),
+                np.random.uniform(0, map_size[1]),
+                np.random.uniform(-np.pi, np.pi)
+            ])
+            # Check if position is valid (not inside an obstacle)
+            valid_position = self.is_valid_position(self.true_position[:2])
+        
+        # Storage for trajectory and particle data
+        self.trajectory = [self.true_position.copy()]
+        self.particle_history = [self.mcl.particles.copy()]
+        
+        # Set up visualization
+        self.fig, self.ax = plt.subplots(figsize=(10, 8))
+        self.fig.canvas.set_window_title('Monte Carlo Localization Test')
+    
+    def is_valid_position(self, position):
+        """Check if a position is valid (not inside an obstacle)"""
+        x, y = position
+        
+        # Check if position is within map bounds
+        if x < 0 or x >= self.map_size[0] or y < 0 or y >= self.map_size[1]:
+            return False
+        
+        # Check if position is inside any obstacle
+        for obstacle in self.obstacles:
+            ox, oy, radius = obstacle
+            distance = np.sqrt((x - ox)**2 + (y - oy)**2)
+            if distance < radius:
+                return False
+        
+        return True
+    
+    def run_simulation(self):
+        """Run the MCL simulation for the specified number of steps"""
+        # Define a set of waypoints for the robot to follow
+        waypoints = []
+        for _ in range(5):  # Generate 5 random waypoints
+            valid_waypoint = False
+            while not valid_waypoint:
+                waypoint = np.array([
+                    np.random.uniform(0, self.map_size[0]),
+                    np.random.uniform(0, self.map_size[1])
+                ])
+                valid_waypoint = self.is_valid_position(waypoint)
+            waypoints.append(waypoint)
+        
+        current_waypoint_idx = 0
+        steps_without_progress = 0
+        
+        for step in range(self.max_steps):
+            # Get the current waypoint
+            target = waypoints[current_waypoint_idx]
+            
+            # Calculate direction to waypoint
+            dx = target[0] - self.true_position[0]
+            dy = target[1] - self.true_position[1]
+            distance = np.sqrt(dx**2 + dy**2)
+            
+            # If we're close to the waypoint, move to the next one
+            if distance < 2.0:
+                current_waypoint_idx = (current_waypoint_idx + 1) % len(waypoints)
+                steps_without_progress = 0
+                continue
+            
+            # Calculate desired heading
+            desired_theta = np.arctan2(dy, dx)
+            
+            # Calculate difference in heading
+            dtheta = desired_theta - self.true_position[2]
+            # Normalize to [-pi, pi]
+            dtheta = np.arctan2(np.sin(dtheta), np.cos(dtheta))
+            
+            # If heading is off by more than 0.1 radians, rotate first
+            if abs(dtheta) > 0.1:
+                # Rotate the robot
+                rotation = 0.1 * np.sign(dtheta)
+                control = np.array([0.0, 0.0, rotation])
+            else:
+                # Move forward
+                speed = min(1.0, distance / 5.0)  # Slow down when close to waypoint
+                control = np.array([speed, 0.0, 0.0])
+            
+            # Simulate robot motion with the control input
+            new_position = simulate_robot_motion(self.true_position, control, noise=self.motion_noise)
+            
+            # Check if the new position is valid
+            if self.is_valid_position(new_position[:2]):
+                self.true_position = new_position
+                steps_without_progress = 0
+            else:
+                # If not valid, try a random direction
+                steps_without_progress += 1
+                if steps_without_progress > 10:
+                    # If we're stuck for too long, pick a new random waypoint
+                    current_waypoint_idx = np.random.randint(0, len(waypoints))
+                    steps_without_progress = 0
+                continue
+            
+            # Simulate sensor readings
+            measurements = simulate_sensor_readings(self.true_position, self.map_data, 
+                                                   self.obstacles, noise=self.measurement_noise)
+            
+            # Update MCL with control and measurements
+            self.mcl.update(control, measurements)
+            
+            # Store trajectory and particles
+            self.trajectory.append(self.true_position.copy())
+            self.particle_history.append(self.mcl.particles.copy())
+            
+            # Get the estimated position
+            estimated_position = self.mcl.get_estimated_position()
+            
+            # Calculate error
+            position_error = np.sqrt((estimated_position[0] - self.true_position[0])**2 + 
+                                    (estimated_position[1] - self.true_position[1])**2)
+            
+            print(f"Step {step+1}/{self.max_steps}: Position Error = {position_error:.2f}")
+        
+        return self.trajectory, self.particle_history
+    
+    def visualize_static(self):
+        """Create a static visualization of the final state"""
+        # Display the map
+        plt.imshow(self.map_data, cmap='gray', origin='lower')
+        
+        # Plot the trajectory
+        trajectory = np.array(self.trajectory)
+        plt.plot(trajectory[:, 0], trajectory[:, 1], 'r-', linewidth=2, label='Robot Path')
+        
+        # Plot start and end positions
+        plt.plot(trajectory[0, 0], trajectory[0, 1], 'go', markersize=10, label='Start')
+        plt.plot(trajectory[-1, 0], trajectory[-1, 1], 'bo', markersize=10, label='End')
+        
+        # Plot the final particles
+        particles = np.array(self.particle_history[-1])
+        plt.scatter(particles[:, 0], particles[:, 1], s=3, c='b', alpha=0.5, label='Particles')
+        
+        # Get the final estimated position
+        estimated_position = self.mcl.get_estimated_position()
+        plt.plot(estimated_position[0], estimated_position[1], 'yo', markersize=10, label='Estimated Position')
+        
+        # Calculate final error
+        position_error = np.sqrt((estimated_position[0] - self.trajectory[-1][0])**2 + 
+                                (estimated_position[1] - self.trajectory[-1][1])**2)
+        
+        plt.title(f'Monte Carlo Localization Test\nFinal Position Error: {position_error:.2f}')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+    
+    def visualize_animation(self):
+        """Create an animated visualization of the MCL over time"""
+        # Display the map
+        map_img = self.ax.imshow(self.map_data, cmap='gray', origin='lower')
+        
+        # Initialize trajectory line
+        line, = self.ax.plot([], [], 'r-', linewidth=2, label='Robot Path')
+        
+        # Initialize particles scatter plot
+        particles_scatter = self.ax.scatter([], [], s=3, c='b', alpha=0.5, label='Particles')
+        
+        # Initialize robot true position
+        robot_true, = self.ax.plot([], [], 'go', markersize=10, label='True Position')
+        
+        # Initialize robot estimated position
+        robot_est, = self.ax.plot([], [], 'yo', markersize=10, label='Estimated Position')
+        
+        # Set up the plot
+        self.ax.set_title('Monte Carlo Localization Simulation')
+        self.ax.legend()
+        
+        def init():
+            line.set_data([], [])
+            particles_scatter.set_offsets(np.empty((0, 2)))
+            robot_true.set_data([], [])
+            robot_est.set_data([], [])
+            return line, particles_scatter, robot_true, robot_est
+        
+        def update(frame):
+            # Update trajectory
+            trajectory = np.array(self.trajectory[:frame+1])
+            line.set_data(trajectory[:, 0], trajectory[:, 1])
+            
+            # Update robot true position
+            robot_true.set_data(self.trajectory[frame][0], self.trajectory[frame][1])
+            
+            # Update particles
+            particles = np.array(self.particle_history[frame])
+            particles_scatter.set_offsets(particles[:, :2])
+            
+            # Update robot estimated position
+            weights = particles[:, 3]
+            est_pos = np.average(particles[:, :3], axis=0, weights=weights)
+            robot_est.set_data(est_pos[0], est_pos[1])
+            
+            # Calculate error
+            position_error = np.sqrt((est_pos[0] - self.trajectory[frame][0])**2 + 
+                                    (est_pos[1] - self.trajectory[frame][1])**2)
+            
+            self.ax.set_title(f'Monte Carlo Localization Simulation (Step {frame+1})\n'
+                             f'Position Error: {position_error:.2f}')
+            
+            return line, particles_scatter, robot_true, robot_est
+        
+        anim = FuncAnimation(self.fig, update, frames=len(self.trajectory),
+                             init_func=init, blit=True, interval=100)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        return anim
+    
+    def save_data(self, trajectory_path, particles_path):
+        """Save trajectory and particle data to files"""
+        # Save trajectory
+        np.save(trajectory_path, np.array(self.trajectory))
+        
+        # Save particles (convert to numpy array first)
+        particles_array = np.array([np.array(p) for p in self.particle_history])
+        np.save(particles_path, particles_array)
+        
+        print(f"Trajectory saved to {trajectory_path}")
+        print(f"Particles saved to {particles_path}")
+
+def main():
+    parser = argparse.ArgumentParser(description='MCL Test Script')
+    parser.add_argument('--map_size', type=int, nargs=2, default=[100, 100], help='Map size (width, height)')
+    parser.add_argument('--num_particles', type=int, default=500, help='Number of particles')
+    parser.add_argument('--motion_noise', type=float, nargs=3, default=[0.1, 0.1, 0.05], 
+                        help='Motion noise parameters (x, y, theta)')
+    parser.add_argument('--measurement_noise', type=float, default=0.1, help='Measurement noise parameter')
+    parser.add_argument('--max_steps', type=int, default=100, help='Maximum simulation steps')
+    parser.add_argument('--obstacle_count', type=int, default=10, help='Number of obstacles in the map')
+    parser.add_argument('--animate', action='store_true', help='Create an animation instead of a static plot')
+    parser.add_argument('--save_trajectory', type=str, help='Path to save the trajectory data (.npy)')
+    parser.add_argument('--save_particles', type=str, help='Path to save the particles data (.npy)')
+    
+    args = parser.parse_args()
+    
+    # Create and run the test
+    test = MCLTest(map_size=args.map_size, 
+                   num_particles=args.num_particles,
+                   motion_noise=tuple(args.motion_noise),
+                   measurement_noise=args.measurement_noise,
+                   max_steps=args.max_steps,
+                   obstacle_count=args.obstacle_count)
+    
+    # Run the simulation
+    trajectory, particle_history = test.run_simulation()
+    
+    # Save data if requested
+    if args.save_trajectory:
+        test.save_data(args.save_trajectory, args.save_particles)
+    
+    # Visualize the results
+    if args.animate:
+        test.visualize_animation()
+    else:
+        test.visualize_static()
+
+if __name__ == '__main__':
+    main()
