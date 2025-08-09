@@ -126,6 +126,15 @@ class DeepMCL(MonteCarloLocalization):
         """
         if self.sensor_nn:
             torch.save(self.sensor_nn.state_dict(), model_path)
+            
+    def save_model(self, model_path: str):
+        """
+        Save the trained sensor model (alias for save_sensor_model for compatibility).
+        
+        Args:
+            model_path: Path to save model file
+        """
+        self.save_sensor_model(model_path)
     
     def generate_training_data(self, num_samples: int, num_sensors: int, 
                               max_range: float, noise_level: float = 0.1) -> Tuple[np.ndarray, np.ndarray]:
@@ -244,6 +253,59 @@ class DeepMCL(MonteCarloLocalization):
                 if batch_idx % 20 == 19:  # Print every 20 batches
                     print(f"[{epoch+1}, {batch_idx+1}] loss: {running_loss/20:.4f}")
                     running_loss = 0.0
+        
+        print("Training complete!")
+        self.sensor_nn.eval()
+    
+    def train_model(self, inputs, targets, epochs=10, batch_size=64, learning_rate=0.001):
+        """
+        Train the sensor model using pre-prepared data.
+        
+        Args:
+            inputs: Tensor of input (noisy) measurements
+            targets: Tensor of target (true) measurements
+            epochs: Number of training epochs
+            batch_size: Batch size for training
+            learning_rate: Learning rate for optimizer
+        """
+        # Create model if it doesn't exist
+        if self.sensor_nn is None:
+            self.create_sensor_model(inputs.shape[1])
+        
+        # Create dataset and dataloader
+        dataset = SensorDataset(inputs.numpy(), targets.numpy())
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        
+        # Loss function and optimizer
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(self.sensor_nn.parameters(), lr=learning_rate)
+        
+        # Training loop
+        print(f"Training sensor model for {epochs} epochs...")
+        self.sensor_nn.train()
+        
+        for epoch in range(epochs):
+            running_loss = 0.0
+            
+            for batch_idx, (raw_batch, true_batch) in enumerate(dataloader):
+                # Transfer to device
+                raw_batch = raw_batch.to(self.device)
+                true_batch = true_batch.to(self.device)
+                
+                # Zero the parameter gradients
+                optimizer.zero_grad()
+                
+                # Forward pass
+                outputs = self.sensor_nn(raw_batch)
+                loss = criterion(outputs, true_batch)
+                
+                # Backward pass and optimize
+                loss.backward()
+                optimizer.step()
+                
+                running_loss += loss.item()
+                
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {running_loss/len(dataloader):.4f}")
         
         print("Training complete!")
         self.sensor_nn.eval()

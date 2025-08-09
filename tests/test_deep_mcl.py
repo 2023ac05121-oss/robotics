@@ -14,6 +14,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import argparse
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
 from matplotlib.animation import FuncAnimation
 
 # Add the parent directory to the Python path
@@ -21,7 +24,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Import the MCL implementation
 from src.localization.monte_carlo_localization import MonteCarloLocalization as StandardMCL
-from src.deep_learning.deep_mcl import DeepMCL
+from src.deep_learning.deep_mcl import DeepMCL, SensorDataset
 from src.utils.robot_utils import create_artificial_map, simulate_robot_motion, simulate_sensor_readings
 
 class DeepMCLTest:
@@ -48,12 +51,13 @@ class DeepMCLTest:
                                        measurement_noise=measurement_noise)
         
         # Initialize Deep Learning Enhanced Monte Carlo Localization
-        self.deep_mcl = DeepMCL(num_particles=num_particles, 
-                               map_data=self.map_data,
-                               motion_noise=motion_noise,
-                               measurement_noise=measurement_noise,
-                               use_trained_model=use_trained_model,
-                               model_path=model_path)
+        self.deep_mcl = DeepMCL(
+            num_particles=num_particles, 
+            map_data=self.map_data,
+            motion_noise=motion_noise,
+            measurement_noise=measurement_noise,
+            model_path=model_path if use_trained_model else None
+        )
         
         # Robot's true position (x, y, theta)
         valid_position = False
@@ -77,7 +81,7 @@ class DeepMCLTest:
         
         # Set up visualization
         self.fig, self.axes = plt.subplots(1, 2, figsize=(16, 8))
-        self.fig.canvas.set_window_title('Deep Learning MCL Comparison')
+        plt.suptitle('Deep Learning MCL Comparison')
     
     def is_valid_position(self, position):
         """Check if a position is valid (not inside an obstacle)"""
@@ -89,9 +93,9 @@ class DeepMCLTest:
         
         # Check if position is inside any obstacle
         for obstacle in self.obstacles:
-            ox, oy, radius = obstacle
-            distance = np.sqrt((x - ox)**2 + (y - oy)**2)
-            if distance < radius:
+            ox, oy, width, height = obstacle
+            # Check if point is inside the rectangle
+            if (ox <= x <= ox + width) and (oy <= y <= oy + height):
                 return False
         
         return True
@@ -117,11 +121,11 @@ class DeepMCLTest:
             
             # Simulate sensor readings (raw)
             raw_measurements = simulate_sensor_readings(position, self.map_data, 
-                                                      self.obstacles, noise=0.0)  # No noise for ground truth
+                                                      num_rays=36, max_range=50.0, noise=0.0)  # No noise for ground truth
             
             # Simulate noisy sensor readings
             noisy_measurements = simulate_sensor_readings(position, self.map_data, 
-                                                         self.obstacles, noise=self.measurement_noise)
+                                                         num_rays=36, max_range=50.0, noise=self.measurement_noise)
             
             train_inputs.append(noisy_measurements)
             train_targets.append(raw_measurements)
@@ -186,11 +190,11 @@ class DeepMCLTest:
             if abs(dtheta) > 0.1:
                 # Rotate the robot
                 rotation = 0.1 * np.sign(dtheta)
-                control = np.array([0.0, 0.0, rotation])
+                control = np.array([0.0, rotation])  # [linear_velocity, angular_velocity]
             else:
                 # Move forward
                 speed = min(1.0, distance / 5.0)  # Slow down when close to waypoint
-                control = np.array([speed, 0.0, 0.0])
+                control = np.array([speed, 0.0])  # [linear_velocity, angular_velocity]
             
             # Simulate robot motion with the control input
             new_position = simulate_robot_motion(self.true_position, control, noise=self.motion_noise)
@@ -210,7 +214,7 @@ class DeepMCLTest:
             
             # Simulate sensor readings
             measurements = simulate_sensor_readings(self.true_position, self.map_data, 
-                                                  self.obstacles, noise=self.measurement_noise)
+                                                  num_rays=36, max_range=50.0, noise=self.measurement_noise)
             
             # Update both MCL implementations with control and measurements
             self.standard_mcl.update(control, measurements)
@@ -255,12 +259,13 @@ class DeepMCLTest:
         trajectory = np.array(self.trajectory)
         ax1.plot(trajectory[:, 0], trajectory[:, 1], 'r-', linewidth=2, label='Robot Path')
         
-        # Plot the final particles
-        particles = np.array(self.standard_particle_history[-1])
-        ax1.scatter(particles[:, 0], particles[:, 1], s=3, c='b', alpha=0.5, label='Particles')
+        # Plot the final particles - convert Particle objects to NumPy array
+        particles = self.standard_particle_history[-1]
+        particles_array = np.array([[p.x, p.y] for p in particles])
+        ax1.scatter(particles_array[:, 0], particles_array[:, 1], s=3, c='b', alpha=0.5, label='Particles')
         
         # Get the final estimated position
-        estimated_position = self.standard_mcl.get_estimated_position()
+        estimated_position = self.standard_mcl.get_position_estimate()  # Using correct method name
         ax1.plot(estimated_position[0], estimated_position[1], 'yo', markersize=10, label='Estimated Position')
         
         # Plot true final position
@@ -276,12 +281,13 @@ class DeepMCLTest:
         # Plot the trajectory
         ax2.plot(trajectory[:, 0], trajectory[:, 1], 'r-', linewidth=2, label='Robot Path')
         
-        # Plot the final particles
-        particles = np.array(self.deep_particle_history[-1])
-        ax2.scatter(particles[:, 0], particles[:, 1], s=3, c='b', alpha=0.5, label='Particles')
+        # Plot the final particles - convert Particle objects to NumPy array
+        particles = self.deep_particle_history[-1]
+        particles_array = np.array([[p.x, p.y] for p in particles])
+        ax2.scatter(particles_array[:, 0], particles_array[:, 1], s=3, c='b', alpha=0.5, label='Particles')
         
         # Get the final estimated position
-        estimated_position = self.deep_mcl.get_estimated_position()
+        estimated_position = self.deep_mcl.get_position_estimate()  # Using correct method name
         ax2.plot(estimated_position[0], estimated_position[1], 'yo', markersize=10, label='Estimated Position')
         
         # Plot true final position
@@ -354,24 +360,40 @@ class DeepMCLTest:
             line2.set_data(trajectory[:, 0], trajectory[:, 1])
             
             # Update robot true position
-            robot_true1.set_data(self.trajectory[frame][0], self.trajectory[frame][1])
-            robot_true2.set_data(self.trajectory[frame][0], self.trajectory[frame][1])
+            robot_true1.set_data([self.trajectory[frame][0]], [self.trajectory[frame][1]])
+            robot_true2.set_data([self.trajectory[frame][0]], [self.trajectory[frame][1]])
             
             # Update standard MCL
-            std_particles = np.array(self.standard_particle_history[frame])
-            particles_scatter1.set_offsets(std_particles[:, :2])
+            std_particles = self.standard_particle_history[frame]
+            # Extract positions from particle objects
+            std_positions = np.array([[p.x, p.y] for p in std_particles])
+            std_weights = np.array([p.weight for p in std_particles])
             
-            std_weights = std_particles[:, 3]
-            std_est_pos = np.average(std_particles[:, :3], axis=0, weights=std_weights)
-            robot_est1.set_data(std_est_pos[0], std_est_pos[1])
+            # Update particle scatter plot
+            particles_scatter1.set_offsets(std_positions)
+            
+            # Calculate weighted average for position estimate
+            if len(std_particles) > 0:
+                std_est_pos = np.average(np.array([[p.x, p.y, p.theta] for p in std_particles]), 
+                                       axis=0, 
+                                       weights=std_weights)
+                robot_est1.set_data([std_est_pos[0]], [std_est_pos[1]])
             
             # Update deep MCL
-            deep_particles = np.array(self.deep_particle_history[frame])
-            particles_scatter2.set_offsets(deep_particles[:, :2])
+            deep_particles = self.deep_particle_history[frame]
+            # Extract positions from particle objects
+            deep_positions = np.array([[p.x, p.y] for p in deep_particles])
+            deep_weights = np.array([p.weight for p in deep_particles])
             
-            deep_weights = deep_particles[:, 3]
-            deep_est_pos = np.average(deep_particles[:, :3], axis=0, weights=deep_weights)
-            robot_est2.set_data(deep_est_pos[0], deep_est_pos[1])
+            # Update particle scatter plot
+            particles_scatter2.set_offsets(deep_positions)
+            
+            # Calculate weighted average for position estimate
+            if len(deep_particles) > 0:
+                deep_est_pos = np.average(np.array([[p.x, p.y, p.theta] for p in deep_particles]), 
+                                        axis=0, 
+                                        weights=deep_weights)
+                robot_est2.set_data([deep_est_pos[0]], [deep_est_pos[1]])
             
             # Update titles with errors
             if frame < len(self.standard_errors):

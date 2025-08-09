@@ -367,7 +367,10 @@ class GridSLAMTest:
             # Update true trajectory and position
             true_trajectory = np.array(self.trajectory[:frame+1])
             true_line.set_data(true_trajectory[:, 0], true_trajectory[:, 1])
-            robot_true.set_data(self.trajectory[frame][0], self.trajectory[frame][1])
+            
+            # Get the current position and update the robot marker
+            current_pos = self.trajectory[frame]
+            robot_true.set_data([current_pos[0]], [current_pos[1]])  # Provide as lists for x and y
             
             # Update estimated map
             estimated_map = self.map_history[frame]
@@ -382,7 +385,7 @@ class GridSLAMTest:
             # Update estimated trajectory and position
             est_trajectory = np.array(self.estimated_trajectory[:frame+1])
             est_line.set_data(est_trajectory[:, 0], est_trajectory[:, 1])
-            robot_est.set_data(self.estimated_trajectory[frame][0], self.estimated_trajectory[frame][1])
+            robot_est.set_data([self.estimated_trajectory[frame][0]], [self.estimated_trajectory[frame][1]])
             
             # Update error metrics
             steps = range(0, frame+1)

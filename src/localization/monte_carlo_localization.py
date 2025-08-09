@@ -294,6 +294,51 @@ class MonteCarloLocalization:
         
         return (x_sum, y_sum, avg_theta)
     
+    def get_estimated_position(self):
+        """
+        Alias for get_position_estimate to maintain backward compatibility.
+        
+        Returns:
+            Tuple of (x, y, theta) representing the estimated position
+        """
+        return self.get_position_estimate()
+    
+    def update(self, control, measurements, sensor_angles=None, max_range=50.0, dt=1.0):
+        """
+        Combined update method that handles both motion and measurement updates.
+        
+        Args:
+            control: Control input [linear_velocity, angular_velocity]
+            measurements: List of distance measurements from sensors
+            sensor_angles: List of angles (in radians) corresponding to each measurement
+                           If None, will create evenly spaced angles
+            max_range: Maximum range of the sensors
+            dt: Time step
+        """
+        # Extract linear and angular velocity from control
+        v, omega = control
+        
+        # Calculate displacement in x, y, and theta
+        if abs(omega) < 1e-6:  # Straight line motion
+            dx = v * dt
+            dy = 0
+            dtheta = 0
+        else:  # Circular motion
+            radius = v / omega
+            dx = radius * math.sin(omega * dt)
+            dy = radius * (1 - math.cos(omega * dt))
+            dtheta = omega * dt
+        
+        # Perform motion update
+        self.motion_update(dx, dy, dtheta)
+        
+        # If no sensor angles provided, create evenly spaced ones
+        if sensor_angles is None:
+            sensor_angles = [i * 2 * math.pi / len(measurements) for i in range(len(measurements))]
+        
+        # Perform measurement update
+        self.measurement_update(measurements, sensor_angles, max_range)
+    
     def visualize(self, robot_pose: Optional[Tuple[float, float, float]] = None, show_particles: bool = True):
         """
         Visualize the current state of the MCL algorithm.

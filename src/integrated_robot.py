@@ -16,11 +16,11 @@ from typing import List, Tuple, Optional
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import components
-from localization.monte_carlo_localization import MonteCarloLocalization
-from mapping.grid_slam import GridSLAM, Environment
-from planning.dstar_planner import DStar
-from deep_learning.deep_mcl import DeepMCL
-from utils.robot_utils import (
+from .localization.monte_carlo_localization import MonteCarloLocalization
+from .mapping.grid_slam import GridSLAM, Environment
+from .planning.dstar_planner import DStar
+from .deep_learning.deep_mcl import DeepMCL
+from .utils.robot_utils import (
     create_random_map, add_border_to_map, visualize_map,
     calculate_path_length, generate_noisy_odometry, 
     generate_noisy_sensor_readings, simulate_range_sensor
@@ -34,10 +34,13 @@ class IntegratedRobot:
     def __init__(self, map_size: Tuple[int, int] = (100, 100), 
                  use_deep_learning: bool = True,
                  num_particles: int = 1000,
+                 grid_size: float = 1.0,
                  num_sensors: int = 8,
                  max_sensor_range: float = 10.0,
+                 sensor_range: float = 20.0,
                  motion_noise: Tuple[float, float, float] = (0.1, 0.1, 0.05),
                  measurement_noise: float = 0.1,
+                 model_path: Optional[str] = None,
                  random_seed: Optional[int] = None):
         """
         Initialize the integrated robot.
@@ -46,10 +49,13 @@ class IntegratedRobot:
             map_size: Tuple of (width, height) for the map
             use_deep_learning: Whether to use deep learning enhanced localization
             num_particles: Number of particles for MCL
+            grid_size: Size of each grid cell for SLAM
             num_sensors: Number of sensors
             max_sensor_range: Maximum sensor range
+            sensor_range: Range for the sensor (used in test scripts)
             motion_noise: Tuple of (x, y, theta) standard deviations for motion model
             measurement_noise: Standard deviation for measurement model
+            model_path: Path to the deep learning model
             random_seed: Optional random seed for reproducibility
         """
         if random_seed is not None:
@@ -59,10 +65,13 @@ class IntegratedRobot:
         self.width, self.height = map_size
         self.use_deep_learning = use_deep_learning
         self.num_particles = num_particles
+        self.grid_size = grid_size
         self.num_sensors = num_sensors
         self.max_sensor_range = max_sensor_range
+        self.sensor_range = sensor_range
         self.motion_noise = motion_noise
         self.measurement_noise = measurement_noise
+        self.model_path = model_path
         
         # Initialize empty map
         self.true_map = None

@@ -78,7 +78,7 @@ class IntegratedRobotTest:
         
         # Set up visualization
         self.fig, self.axes = plt.subplots(2, 2, figsize=(16, 12))
-        self.fig.canvas.set_window_title('Integrated Robot Test')
+        plt.suptitle('Integrated Robot Test')
     
     def generate_start_goal(self):
         """Generate valid start and goal positions"""
@@ -156,7 +156,7 @@ class IntegratedRobotTest:
             
             # Simulate sensor readings
             measurements = simulate_sensor_readings(self.current_pos, self.true_map, 
-                                                  self.obstacles, noise=self.measurement_noise)
+                                                  num_rays=36, max_range=50.0, noise=self.measurement_noise)
             
             # Get control command from the robot
             control = self.robot.get_control(measurements)
